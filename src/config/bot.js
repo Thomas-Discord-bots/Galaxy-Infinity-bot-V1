@@ -24,7 +24,7 @@ export const botConfig = {
     activities: [
       {
         name: "Custom Status", // required by Discord API, not shown in the client
-        state: "stalking",     // this is what people actually see
+        state: "!!🚨NEW UPDATE🚨!!: Added music system from YT, Spotify, Deezer and much more!!, Also changed bot name to 'Galaxy Infinity bot V1'",     // this is what people actually see
         type: 4,               // Custom
       },
     ],
