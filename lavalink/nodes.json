@@ -26,5 +26,27 @@
     "password": "free",
     "secure": true,
     "name": "TriniumHost"
-  }
+  },
+  {
+    "host": "lavalink.devamop.in",
+    "port": 443,
+    "password": "youshallnotpass",
+    "secure": true,
+    "name": "Devamop-India"
+},
+{
+    "host": "lavalink.jirayu.net",
+    "port": 13592,
+    "password": "youshallnotpass",
+    "secure": false,
+    "name": "Jirayu-Alt"
+},
+{
+    "host": "sg1-nodelink.nyxbot.app",
+    "port": 3000,
+    "password": "nyxbot.app/support",
+    "secure": false,
+    "name": "NyxBot-Singapore"
+}
+
 ]
