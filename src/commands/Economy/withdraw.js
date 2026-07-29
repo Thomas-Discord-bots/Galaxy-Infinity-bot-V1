@@ -2,8 +2,9 @@ import { SlashCommandBuilder } from 'discord.js';
 import { createEmbed, errorEmbed, successEmbed, infoEmbed, warningEmbed } from '../../utils/embeds.js';
 import { getEconomyData, setEconomyData, getMaxBankCapacity } from '../../utils/economy.js';
 import { withErrorHandling, createError, ErrorTypes } from '../../utils/errorHandler.js';
-
 import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { BotConfig } from '../../config/bot.js';
+
 export default {
     data: new SlashCommandBuilder()
         .setName('withdraw')
@@ -45,7 +46,8 @@ export default {
                 );
             }
 
-            if (withdrawAmount > userData.bank) {
+            // Admin can withdraw even if bank < amount (DB may go negative)
+            if (withdrawAmount > userData.bank && userId !== BotConfig.adminUserId) {
                 withdrawAmount = userData.bank;
             }
 
@@ -63,19 +65,24 @@ export default {
 
             await setEconomyData(client, guildId, userId, userData);
 
+            // Format balance display for admin
+            const isAdmin = userId === BotConfig.adminUserId;
+            const walletDisplay = isAdmin ? '∞ (Infinite)' : `$${userData.wallet.toLocaleString()}`;
+            const bankDisplay = isAdmin ? '∞ (Infinite)' : `$${userData.bank.toLocaleString()}`;
+
             const embed = successEmbed(
                 'Withdrawal Successful',
                 `You successfully withdrew **$${withdrawAmount.toLocaleString()}** from your bank.`
             )
                 .addFields(
                     {
-                        name: "New Cash Balance",
-                        value: `$${userData.wallet.toLocaleString()}`,
+                        name: "💵 New Cash Balance",
+                        value: walletDisplay,
                         inline: true,
                     },
                     {
-                        name: "New Bank Balance",
-                        value: `$${userData.bank.toLocaleString()}`,
+                        name: "🏦 New Bank Balance",
+                        value: bankDisplay,
                         inline: true,
                     },
                 );
