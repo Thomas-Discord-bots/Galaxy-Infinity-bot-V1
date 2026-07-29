@@ -40,22 +40,23 @@ export const helpBackButton = {
 export const helpBugReportButton = {
     name: BUG_REPORT_BUTTON_ID,
     async execute(interaction, client) {
-        const githubButton = new ButtonBuilder()
-            .setLabel('🐛 Report Bug on GitHub')
+        // REPLACE THE URL BELOW WITH YOUR ACTUAL DISCORD SERVER INVITE LINK
+        const discordButton = new ButtonBuilder()
+            .setLabel('💬 Report Bug on Discord')
             .setStyle(ButtonStyle.Link)
-            .setURL('https://github.com/codebymitch/TitanBot/issues');
+            .setURL('https://discord.gg/yGWK3NGAVt');
 
-        const bugRow = new ActionRowBuilder().addComponents(githubButton);
+        const bugRow = new ActionRowBuilder().addComponents(discordButton);
 
         const bugReportEmbed = createEmbed({
             title: '🐛 Bug Report',
-            description: 'Found a bug? Please report it on our GitHub Issues page!\n\n' +
+            description: 'Found a bug? Please report it directly in our Discord server support channel!\n\n' +
                 '**When reporting a bug, please include:**\n' +
                 '• 📝 Detailed description of the issue\n' +
                 '• 📋 Steps to reproduce the problem\n' +
                 '• 📸 Screenshots if applicable\n' +
                 '• 💻 Your bot version and environment\n\n' +
-                'This helps us fix issues faster and more effectively!',
+                'Thank you for helping us improve the bot!',
             color: 'error'
         });
         bugReportEmbed.setFooter({
