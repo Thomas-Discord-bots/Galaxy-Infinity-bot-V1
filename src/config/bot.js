@@ -56,6 +56,12 @@ export const botConfig = {
   },
 
   // =========================
+  // ADMIN / BOT OWNER
+  // =========================
+  // A single admin user ID used for special display/bypass logic (infinite money, etc.).
+  adminUserId: process.env.ADMIN_USER_ID || '1472237148324233361',
+
+  // =========================
   // APPLICATIONS SYSTEM
   // =========================
   applications: {
@@ -356,6 +362,7 @@ export const botConfig = {
     // 300000 = 5 minutes.
     cooldownCleanupInterval: 300000,
     // Maximum metadata payload size for audit entries (bytes).
+    // 4096 = 4kb
     maxAuditMetadataBytes: 4096,
     // Maximum number of audit entries kept in memory.
     maxInMemoryAuditEntries: 1000,
@@ -580,7 +587,7 @@ export function getBotMessage(key, replacements = {}) {
   let message = botConfig.messages?.[key] || key;
 
   for (const [placeholder, value] of Object.entries(replacements)) {
-    message = message.replace(new RegExp(`\\{${placeholder}\\}`, "g"), String(value));
+    message = message.replace(new RegExp(`\{${placeholder}\}`, "g"), String(value));
   }
 
   return message;
