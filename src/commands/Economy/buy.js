@@ -5,6 +5,7 @@ import { getEconomyData, setEconomyData } from '../../utils/economy.js';
 import { getGuildConfig } from '../../services/config/guildConfig.js';
 import { withErrorHandling, createError, ErrorTypes } from '../../utils/errorHandler.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { BotConfig } from '../../config/bot.js';
 
 const SHOP_ITEMS = shopItems;
 
@@ -63,7 +64,8 @@ export default {
 
             const userData = await getEconomyData(client, guildId, userId);
 
-            if (userData.wallet < totalCost) {
+            // Admin bypass for insufficient funds (display-only infinite behavior)
+            if (userId !== BotConfig.adminUserId && userData.wallet < totalCost) {
                 throw createError(
                     "Insufficient funds",
                     ErrorTypes.VALIDATION,
@@ -99,6 +101,7 @@ export default {
                 }
             }
 
+            // Deduct cost (admins may go negative in DB)
             userData.wallet -= totalCost;
 
             let successDescription = `You successfully purchased ${quantity}x **${item.name}** for **$${totalCost.toLocaleString()}**!`;
@@ -109,6 +112,9 @@ export default {
                 const role = interaction.guild.roles.cache.get(PREMIUM_ROLE_ID);
 
                 if (!role) {
+                    // refund
+                    userData.wallet += totalCost;
+                    await setEconomyData(client, guildId, userId, userData);
                     throw createError(
                         "Role not found",
                         ErrorTypes.CONFIGURATION,
@@ -124,6 +130,7 @@ export default {
                     );
                     successDescription += `\n\n**👑 The role ${role.toString()} has been granted to you!**`;
                 } catch (roleError) {
+                    // refund
                     userData.wallet += totalCost;
                     await setEconomyData(client, guildId, userId, userData);
                     throw createError(
@@ -137,8 +144,7 @@ export default {
                 userData.upgrades[itemId] = true;
                 successDescription += `\n\n**✨ Your upgrade is now active!**`;
             } else if (item.type === "consumable" || item.type === "tool") {
-                userData.inventory[itemId] =
-                    (userData.inventory[itemId] || 0) + quantity;
+                userData.inventory[itemId] = (userData.inventory[itemId] || 0) + quantity;
                 if (item.type === "tool") {
                     successDescription += `\n\n**🛠️ ${item.name} added to your inventory!**`;
                 }
@@ -146,12 +152,15 @@ export default {
 
             await setEconomyData(client, guildId, userId, userData);
 
+            const isAdmin = userId === BotConfig.adminUserId;
+            const balanceDisplay = isAdmin ? '∞ (Infinite)' : `$${userData.wallet.toLocaleString()}`;
+
             const embed = successEmbed(
                 "💰 Purchase Successful",
                 successDescription,
             ).addFields({
                 name: "New Balance",
-                value: `$${userData.wallet.toLocaleString()}`,
+                value: balanceDisplay,
                 inline: true,
             });
 
