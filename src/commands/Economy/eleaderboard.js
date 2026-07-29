@@ -4,6 +4,7 @@ import { withErrorHandling, createError, ErrorTypes } from '../../utils/errorHan
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { getEconomyPrefix } from '../../utils/database.js';
+import { BotConfig } from '../../config/bot.js';
 
 export default {
     data: new SlashCommandBuilder()
@@ -42,9 +43,11 @@ export default {
                 const userData = await client.db.get(key);
 
                 if (userData) {
+                    // Admin always shows infinite
+                    const netWorth = userId === BotConfig.adminUserId ? Infinity : (userData.wallet || 0) + (userData.bank || 0);
                     allUserData.push({
                         userId: userId,
-                        net_worth: (userData.wallet || 0) + (userData.bank || 0),
+                        net_worth: netWorth,
                     });
                 }
             }
@@ -63,8 +66,11 @@ export default {
                 const rank = i + 1;
                 const emoji = rankEmoji[i] || `**#${rank}**`;
 
+                // Display infinite for admin, normal for others
+                const displayValue = user.net_worth === Infinity ? '∞ (Infinite)' : user.net_worth.toLocaleString();
+
                 leaderboardEntries.push(
-                    `${emoji} <@${user.userId}> - 🏦 ${user.net_worth.toLocaleString()}`,
+                    `${emoji} <@${user.userId}> - 🏦 ${displayValue}`,
                 );
             }
 
