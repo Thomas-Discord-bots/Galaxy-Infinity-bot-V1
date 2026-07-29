@@ -1,7 +1,7 @@
 {
   "name": "titanbot",
   "version": "2.1.0",
-  "description": "Modular Ultimate Community Bot by Touchpoint Support",
+  "description": "Modular Ultimate Community Bot",
   "main": "src/app.js",
   "type": "module",
   "scripts": {
