@@ -3,6 +3,7 @@ import { createEmbed, successEmbed, infoEmbed, warningEmbed } from '../../utils/
 import { getEconomyData, setEconomyData } from '../../utils/economy.js';
 import { withErrorHandling, createError, ErrorTypes } from '../../utils/errorHandler.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { BotConfig } from '../../config/bot.js';
 
 const BASE_WIN_CHANCE = 0.4;
 const CLOVER_WIN_BONUS = 0.1;
@@ -49,7 +50,7 @@ export default {
                 );
             }
 
-            if (userData.wallet < betAmount) {
+            if (userData.wallet < betAmount && userId !== BotConfig.adminUserId) {
                 throw createError(
                     "Insufficient cash for gamble",
                     ErrorTypes.VALIDATION,
@@ -106,9 +107,13 @@ userData.lastGamble = now;
 
             const newCash = userData.wallet;
 
+            // Format balance display for admin
+            const isAdmin = userId === BotConfig.adminUserId;
+            const newCashDisplay = isAdmin ? '∞ (Infinite)' : `$${newCash.toLocaleString()}`;
+
             resultEmbed.addFields({
                 name: "New Cash Balance",
-                value: `$${newCash.toLocaleString()}`,
+                value: newCashDisplay,
                 inline: true,
             });
 
