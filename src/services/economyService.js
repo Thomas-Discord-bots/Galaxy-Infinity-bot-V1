@@ -4,9 +4,9 @@ import { logger } from '../utils/logger.js';
 import { getEconomyData, setEconomyData, getMaxBankCapacity } from '../utils/economy.js';
 import { createError, ErrorTypes } from '../utils/errorHandler.js';
 import { wrapServiceClassMethods } from '../utils/serviceErrorBoundary.js';
+import { BotConfig } from '../config/bot.js';
 
 class EconomyService {
-
   static DAILY_COOLDOWN = 24 * 60 * 60 * 1000;
   static WORK_COOLDOWN = 30 * 60 * 1000;
   static GAMBLE_COOLDOWN = 5 * 60 * 1000;
@@ -15,7 +15,7 @@ class EconomyService {
   static MINE_COOLDOWN = 60 * 60 * 1000;
   static FISH_COOLDOWN = 45 * 60 * 1000;
   static BEG_COOLDOWN = 30 * 60 * 1000;
-  
+
   static DAILY_AMOUNT = 1000;
   static MAX_SAFE_INTEGER = Number.MAX_SAFE_INTEGER;
 
@@ -32,7 +32,7 @@ class EconomyService {
 
   static async claimDaily(client, guildId, userId) {
     logger.debug(`[ECONOMY_SERVICE] claimDaily requested`, { userId, guildId });
-    
+
     const userData = await getEconomyData(client, guildId, userId);
     if (!userData) {
       logger.error(`[ECONOMY_SERVICE] Failed to load economy data for daily`);
@@ -49,10 +49,7 @@ class EconomyService {
     const remaining = lastDaily + this.DAILY_COOLDOWN - now;
 
     if (remaining > 0) {
-      logger.warn(`[ECONOMY_SERVICE] Daily cooldown active`, {
-        userId,
-        timeRemaining: remaining
-      });
+      logger.warn(`[ECONOMY_SERVICE] Daily cooldown active`, { userId, timeRemaining: remaining });
       throw createError(
         "Daily cooldown active",
         ErrorTypes.RATE_LIMIT,
@@ -63,13 +60,18 @@ class EconomyService {
 
     const earned = this.DAILY_AMOUNT;
     const nextWallet = (userData.wallet || 0) + earned;
-    this.assertSafeBalance(nextWallet, { operation: 'claimDaily', userId, guildId });
+
+    // Allow admin to go below/above normal limits by skipping safe-assert
+    if (userId !== BotConfig.adminUserId) {
+      this.assertSafeBalance(nextWallet, { operation: 'claimDaily', userId, guildId });
+    }
+
     userData.wallet = nextWallet;
     userData.lastDaily = now;
 
     try {
       await setEconomyData(client, guildId, userId, userData);
-      
+
       logger.info(`[ECONOMY_TRANSACTION] Daily claimed`, {
         userId,
         guildId,
@@ -79,17 +81,9 @@ class EconomyService {
         source: 'claim_daily'
       });
 
-      return {
-        earned,
-        newWallet: userData.wallet,
-        nextClaimTime: new Date(now + this.DAILY_COOLDOWN)
-      };
+      return { earned, newWallet: userData.wallet, nextClaimTime: new Date(now + this.DAILY_COOLDOWN) };
     } catch (error) {
-      logger.error(`[ECONOMY_SERVICE] Failed to save daily claim`, error, {
-        userId,
-        guildId,
-        amount: earned
-      });
+      logger.error(`[ECONOMY_SERVICE] Failed to save daily claim`, error, { userId, guildId, amount: earned });
       throw createError(
         "Failed to save daily claim",
         ErrorTypes.DATABASE,
@@ -100,29 +94,14 @@ class EconomyService {
   }
 
   static async transferMoney(client, guildId, senderId, receiverId, amount) {
-    logger.debug(`[ECONOMY_SERVICE] transferMoney requested`, {
-      senderId,
-      receiverId,
-      amount,
-      guildId
-    });
+    logger.debug(`[ECONOMY_SERVICE] transferMoney requested`, { senderId, receiverId, amount, guildId });
 
     if (amount <= 0) {
-      throw createError(
-        "Invalid transfer amount",
-        ErrorTypes.VALIDATION,
-        "Amount must be greater than zero.",
-        { amount, senderId }
-      );
+      throw createError("Invalid transfer amount", ErrorTypes.VALIDATION, "Amount must be greater than zero.", { amount, senderId });
     }
 
     if (senderId === receiverId) {
-      throw createError(
-        "Cannot pay self",
-        ErrorTypes.VALIDATION,
-        "You cannot pay yourself.",
-        { senderId, receiverId }
-      );
+      throw createError("Cannot pay self", ErrorTypes.VALIDATION, "You cannot pay yourself.", { senderId, receiverId });
     }
 
     this.validateAmount(amount, { operation: 'transfer', senderId, receiverId });
@@ -133,171 +112,94 @@ class EconomyService {
     ]);
 
     if (!senderData || !receiverData) {
-      logger.error(`[ECONOMY_SERVICE] Failed to load economy data for transfer`, {
-        senderLoaded: !!senderData,
-        receiverLoaded: !!receiverData
-      });
-      throw createError(
-        "Failed to load economy data",
-        ErrorTypes.DATABASE,
-        "Failed to load economy data. Please try again later.",
-        { senderId, receiverId, guildId }
-      );
+      logger.error(`[ECONOMY_SERVICE] Failed to load economy data for transfer`, { senderLoaded: !!senderData, receiverLoaded: !!receiverData });
+      throw createError("Failed to load economy data", ErrorTypes.DATABASE, "Failed to load economy data. Please try again later.", { senderId, receiverId, guildId });
     }
 
-    if (senderData.wallet < amount) {
-      logger.warn(`[ECONOMY_SERVICE] Insufficient funds for transfer`, {
-        senderId,
-        required: amount,
-        available: senderData.wallet
-      });
-      throw createError(
-        "Insufficient funds",
-        ErrorTypes.VALIDATION,
-        `You only have **$${senderData.wallet.toLocaleString()}** in cash.`,
-        { required: amount, available: senderData.wallet, senderId }
-      );
+    const isAdminSender = senderId === BotConfig.adminUserId;
+
+    // Allow admin to transfer even if they don't have enough funds (DB can go negative)
+    if (!isAdminSender && senderData.wallet < amount) {
+      logger.warn(`[ECONOMY_SERVICE] Insufficient funds for transfer`, { senderId, required: amount, available: senderData.wallet });
+      throw createError("Insufficient funds", ErrorTypes.VALIDATION, `You only have **$${senderData.wallet.toLocaleString()}** in cash.`, { required: amount, available: senderData.wallet, senderId });
     }
 
     const walletBefore = senderData.wallet;
     const senderNext = (senderData.wallet || 0) - amount;
     const receiverNext = (receiverData.wallet || 0) + amount;
 
-    this.assertSafeBalance(senderNext, { operation: 'transfer.sender', senderId, amount });
+    // Skip safe-assert for admin sender so they can go negative
+    if (!isAdminSender) this.assertSafeBalance(senderNext, { operation: 'transfer.sender', senderId, amount });
     this.assertSafeBalance(receiverNext, { operation: 'transfer.receiver', receiverId, amount });
 
     senderData.wallet = senderNext;
     receiverData.wallet = receiverNext;
 
     try {
-      
       await setEconomyData(client, guildId, senderId, senderData);
-      
       try {
-        
         await setEconomyData(client, guildId, receiverId, receiverData);
       } catch (receiverError) {
-        
         logger.error(`[ECONOMY_CRITICAL] Failed to credit receiver ${receiverId}. Attempting rollback for sender ${senderId}...`, receiverError);
-        
+        // Attempt rollback for sender
         senderData.wallet = walletBefore;
         try {
           await setEconomyData(client, guildId, senderId, senderData);
           logger.info(`[ECONOMY_ROLLBACK] Successfully rolled back sender ${senderId} after receiver credit failure.`);
         } catch (rollbackError) {
-          logger.error(`[ECONOMY_FATAL] ROLLBACK FAILED for sender ${senderId}! Data is now inconsistent.`, rollbackError);
-          
+          logger.error(`[ECONOMY_FATAL] ROLLBACK FAILED for sender ${senderId}! Data may be inconsistent.`, rollbackError);
         }
-        
         throw receiverError;
       }
 
-      logger.info(`[ECONOMY_TRANSACTION] Money transferred`, {
-        type: 'transfer',
-        senderId,
-        receiverId,
-        guildId,
-        amount,
-        senderNewBalance: senderData.wallet,
-        receiverNewBalance: receiverData.wallet,
-        timestamp: new Date().toISOString()
-      });
+      logger.info(`[ECONOMY_TRANSACTION] Money transferred`, { type: 'transfer', senderId, receiverId, guildId, amount, senderNewBalance: senderData.wallet, receiverNewBalance: receiverData.wallet, timestamp: new Date().toISOString() });
 
-      return {
-        senderNewBalance: senderData.wallet,
-        receiverNewBalance: receiverData.wallet
-      };
+      return { senderNewBalance: senderData.wallet, receiverNewBalance: receiverData.wallet };
     } catch (error) {
-      logger.error(`[ECONOMY_SERVICE] Transfer execution failed, DATA MAY BE INCONSISTENT`, error, {
-        senderId,
-        receiverId,
-        amount,
-        guildId,
-        senderBefore: walletBefore,
-        senderAfter: senderData.wallet,
-        receiverAfter: receiverData.wallet
-      });
-      throw createError(
-        "Failed to save transfer",
-        ErrorTypes.DATABASE,
-        "Failed to process transfer. Please try again.",
-        { senderId, receiverId, amount }
-      );
+      logger.error(`[ECONOMY_SERVICE] Transfer execution failed, DATA MAY BE INCONSISTENT`, error, { senderId, receiverId, amount, guildId, senderBefore: walletBefore, senderAfter: senderData.wallet, receiverAfter: receiverData.wallet });
+      throw createError("Failed to save transfer", ErrorTypes.DATABASE, "Failed to process transfer. Please try again.", { senderId, receiverId, amount });
     }
   }
 
   static async addMoney(client, guildId, userId, amount, source = 'unknown') {
-    if (amount <= 0) {
-      throw createError(
-        "Invalid amount",
-        ErrorTypes.VALIDATION,
-        "Amount must be positive",
-        { amount, userId, source }
-      );
-    }
-
+    if (amount <= 0) throw createError("Invalid amount", ErrorTypes.VALIDATION, "Amount must be positive", { amount, userId, source });
     this.validateAmount(amount, { operation: 'addMoney', userId, source });
 
     const userData = await getEconomyData(client, guildId, userId);
     const balanceBefore = userData.wallet || 0;
     const nextWallet = balanceBefore + amount;
-    this.assertSafeBalance(nextWallet, { operation: 'addMoney', userId, source, amount });
-    userData.wallet = nextWallet;
 
+    // Admin: allow out-of-range balances (skip assert)
+    if (userId !== BotConfig.adminUserId) this.assertSafeBalance(nextWallet, { operation: 'addMoney', userId, source, amount });
+
+    userData.wallet = nextWallet;
     await setEconomyData(client, guildId, userId, userData);
 
-    logger.info(`[ECONOMY_TRANSACTION] Money added`, {
-      userId,
-      guildId,
-      amount,
-      source,
-      balanceBefore,
-      balanceAfter: userData.wallet,
-      delta: amount,
-      timestamp: new Date().toISOString()
-    });
+    logger.info(`[ECONOMY_TRANSACTION] Money added`, { userId, guildId, amount, source, balanceBefore, balanceAfter: userData.wallet, delta: amount, timestamp: new Date().toISOString() });
 
     return userData;
   }
 
   static async removeMoney(client, guildId, userId, amount, reason = 'unknown') {
-    if (amount <= 0) {
-      throw createError(
-        "Invalid amount",
-        ErrorTypes.VALIDATION,
-        "Amount must be positive",
-        { amount, userId, reason }
-      );
-    }
-
+    if (amount <= 0) throw createError("Invalid amount", ErrorTypes.VALIDATION, "Amount must be positive", { amount, userId, reason });
     this.validateAmount(amount, { operation: 'removeMoney', userId, reason });
 
     const userData = await getEconomyData(client, guildId, userId);
     const balanceBefore = userData.wallet || 0;
 
-    if (balanceBefore < amount) {
-      throw createError(
-        "Insufficient funds",
-        ErrorTypes.VALIDATION,
-        `You only have **$${balanceBefore.toLocaleString()}**.`,
-        { required: amount, available: balanceBefore, reason }
-      );
+    // Admin: allow negative balances (skip insufficient funds check)
+    if (userId !== BotConfig.adminUserId && balanceBefore < amount) {
+      throw createError("Insufficient funds", ErrorTypes.VALIDATION, `You only have **$${balanceBefore.toLocaleString()}**.`, { required: amount, available: balanceBefore, reason });
     }
 
-    userData.wallet = balanceBefore - amount;
+    const nextWallet = balanceBefore - amount;
 
+    if (userId !== BotConfig.adminUserId) this.assertSafeBalance(nextWallet, { operation: 'removeMoney', userId, reason });
+
+    userData.wallet = nextWallet;
     await setEconomyData(client, guildId, userId, userData);
 
-    logger.info(`[ECONOMY_TRANSACTION] Money removed`, {
-      userId,
-      guildId,
-      amount,
-      reason,
-      balanceBefore,
-      balanceAfter: userData.wallet,
-      delta: -amount,
-      timestamp: new Date().toISOString()
-    });
+    logger.info(`[ECONOMY_TRANSACTION] Money removed`, { userId, guildId, amount, reason, balanceBefore, balanceAfter: userData.wallet, delta: -amount, timestamp: new Date().toISOString() });
 
     return userData;
   }
@@ -308,29 +210,20 @@ class EconomyService {
     const userData = await getEconomyData(client, guildId, userId);
     const maxBank = getMaxBankCapacity(userData);
 
-    if (userData.wallet < amount) {
-      throw createError(
-        "Insufficient cash",
-        ErrorTypes.VALIDATION,
-        `You only have **$${userData.wallet.toLocaleString()}** in cash.`,
-        { required: amount, available: userData.wallet }
-      );
+    // Admin: skip wallet sufficiency check and allow negative wallet after deposit
+    if (userId !== BotConfig.adminUserId && userData.wallet < amount) {
+      throw createError("Insufficient cash", ErrorTypes.VALIDATION, `You only have **$${userData.wallet.toLocaleString()}** in cash.`, { required: amount, available: userData.wallet });
     }
 
     const currentBank = userData.bank || 0;
     if (currentBank + amount > maxBank) {
-      throw createError(
-        "Bank capacity exceeded",
-        ErrorTypes.VALIDATION,
-        `Your bank can only hold **$${maxBank.toLocaleString()}**. You would exceed capacity by **$${(currentBank + amount - maxBank).toLocaleString()}**.`,
-        { capacity: maxBank, current: currentBank, requested: amount }
-      );
+      throw createError("Bank capacity exceeded", ErrorTypes.VALIDATION, `Your bank can only hold **$${maxBank.toLocaleString()}**. You would exceed capacity by **$${(currentBank + amount - maxBank).toLocaleString()}**.`, { capacity: maxBank, current: currentBank, requested: amount });
     }
 
-    const nextWallet = userData.wallet - amount;
+    const nextWallet = (userData.wallet || 0) - amount;
     const nextBank = (userData.bank || 0) + amount;
 
-    this.assertSafeBalance(nextWallet, { operation: 'deposit.wallet', userId, amount });
+    if (userId !== BotConfig.adminUserId) this.assertSafeBalance(nextWallet, { operation: 'deposit.wallet', userId, amount });
     this.assertSafeBalance(nextBank, { operation: 'deposit.bank', userId, amount });
 
     userData.wallet = nextWallet;
@@ -356,20 +249,16 @@ class EconomyService {
     const userData = await getEconomyData(client, guildId, userId);
     const bank = userData.bank || 0;
 
-    if (bank < amount) {
-      throw createError(
-        "Insufficient bank balance",
-        ErrorTypes.VALIDATION,
-        `You only have **$${bank.toLocaleString()}** in your bank.`,
-        { required: amount, available: bank }
-      );
+    // Admin: allow withdrawing even if bank < amount
+    if (userId !== BotConfig.adminUserId && bank < amount) {
+      throw createError("Insufficient bank balance", ErrorTypes.VALIDATION, `You only have **$${bank.toLocaleString()}** in your bank.`, { required: amount, available: bank });
     }
 
     const nextWallet = (userData.wallet || 0) + amount;
     const nextBank = bank - amount;
 
-    this.assertSafeBalance(nextWallet, { operation: 'withdraw.wallet', userId, amount });
-    this.assertSafeBalance(nextBank, { operation: 'withdraw.bank', userId, amount });
+    if (userId !== BotConfig.adminUserId) this.assertSafeBalance(nextWallet, { operation: 'withdraw.wallet', userId, amount });
+    if (userId !== BotConfig.adminUserId) this.assertSafeBalance(nextBank, { operation: 'withdraw.bank', userId, amount });
 
     userData.wallet = nextWallet;
     userData.bank = nextBank;
