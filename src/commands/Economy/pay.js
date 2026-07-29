@@ -5,6 +5,7 @@ import { withErrorHandling, createError, ErrorTypes } from '../../utils/errorHan
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import EconomyService from '../../services/economyService.js';
+import { BotConfig } from '../../config/bot.js';
 
 export default {
     data: new SlashCommandBuilder()
@@ -101,6 +102,10 @@ export default {
             const updatedSenderData = await getEconomyData(client, guildId, senderId);
             const updatedReceiverData = await getEconomyData(client, guildId, receiver.id);
 
+            // Format balance display for admin
+            const isAdminSender = senderId === BotConfig.adminUserId;
+            const senderBalanceDisplay = isAdminSender ? '∞ (Infinite)' : `$${updatedSenderData.wallet.toLocaleString()}`;
+
             const embed = successEmbed(
                 'Payment Successful',
                 `You successfully paid **${receiver.username}** the amount of **$${amount.toLocaleString()}**!`
@@ -113,7 +118,7 @@ export default {
                     },
                     {
                         name: "Your New Balance",
-                        value: `$${updatedSenderData.wallet.toLocaleString()}`,
+                        value: senderBalanceDisplay,
                         inline: true,
                     },
                 )
