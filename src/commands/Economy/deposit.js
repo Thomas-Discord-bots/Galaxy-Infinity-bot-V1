@@ -3,6 +3,7 @@ import { successEmbed, buildUserErrorEmbed } from '../../utils/embeds.js';
 import { getEconomyData, setEconomyData, getMaxBankCapacity } from '../../utils/economy.js';
 import { withErrorHandling, createError, ErrorTypes } from '../../utils/errorHandler.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { BotConfig } from '../../config/bot.js';
 
 export default {
     data: new SlashCommandBuilder()
@@ -61,7 +62,7 @@ export default {
                 );
             }
 
-            if (depositAmount > userData.wallet) {
+            if (depositAmount > userData.wallet && userId !== BotConfig.adminUserId) {
                 depositAmount = userData.wallet;
                 await interaction.followUp({
                     embeds: [
@@ -80,7 +81,7 @@ export default {
                 throw createError(
                     "Bank is full",
                     ErrorTypes.VALIDATION,
-                    `Your bank is currently full (Max Capacity: $${maxBank.toLocaleString()}). Purchase a **Bank Upgrade** to increase your limit.`,
+                    `Your bank is currently full (Max Capacity: $${maxBank.toLocaleString()}). Purchase a **Bank Upgrade** to increase your limit.",
                     { maxBank, currentBank: userData.bank, userId }
                 );
             }
@@ -116,19 +117,24 @@ export default {
 
             await setEconomyData(client, guildId, userId, userData);
 
+            // Format balance display for admin
+            const isAdmin = userId === BotConfig.adminUserId;
+            const walletDisplay = isAdmin ? '∞ (Infinite)' : `$${userData.wallet.toLocaleString()}`;
+            const bankDisplay = isAdmin ? '∞ (Infinite)' : `$${userData.bank.toLocaleString()} / $${maxBank.toLocaleString()}`;
+
             const embed = successEmbed(
                 'Deposit Successful',
                 `You successfully deposited **$${depositAmount.toLocaleString()}** into your bank.`
             )
                 .addFields(
                     {
-                        name: "New Cash Balance",
-                        value: `$${userData.wallet.toLocaleString()}`,
+                        name: "💵 New Cash Balance",
+                        value: walletDisplay,
                         inline: true,
                     },
                     {
-                        name: "New Bank Balance",
-                        value: `$${userData.bank.toLocaleString()} / $${maxBank.toLocaleString()}`,
+                        name: "🏦 New Bank Balance",
+                        value: bankDisplay,
                         inline: true,
                     },
                 );
