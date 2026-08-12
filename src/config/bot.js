@@ -24,7 +24,7 @@ export const botConfig = {
     activities: [
       {
         name: "Custom Status", // required by Discord API, not shown in the client
-        state: "Im Currently disabled by Thomas. He also disabled discord so DM'ing him is useluss. Have a nice life!",     // this is what people actually see
+        state: "❗️NEW UPDATE❗️: added music support for YouTube, spotify, deezer, aplle music,...",     // this is what people actually see
         type: 4,               // Custom
       },
     ],
