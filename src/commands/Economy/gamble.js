@@ -5,10 +5,10 @@ import { withErrorHandling, createError, ErrorTypes } from '../../utils/errorHan
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { BotConfig } from '../../config/bot.js';
 
-const BASE_WIN_CHANCE = 0.5;
+const BASE_WIN_CHANCE = 0.4;
 const CLOVER_WIN_BONUS = 0.2;
 const CHARM_WIN_BONUS = 0.08;
-const PAYOUT_MULTIPLIER = 1.7;
+const PAYOUT_MULTIPLIER = 1.5;
 const GAMBLE_COOLDOWN = 5 * 60 * 1000;
 
 export default {
