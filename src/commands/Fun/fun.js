@@ -391,7 +391,7 @@ async function handleBaby(interaction, db) {
   const authorFamily = await getFamily(db, interaction.guildId, authorId);
 
   if (!authorFamily.partnerId) {
-    return reply(interaction, 'You need a partner before you can have a fake baby.');
+    return reply(interaction, 'You need a partner before you can have a baby.');
   }
 
   const partnerId = authorFamily.partnerId;
@@ -406,7 +406,7 @@ async function handleBaby(interaction, db) {
   if (remaining) {
     return reply(
       interaction,
-      `You must wait ${formatTime(remaining)} before having another fake baby.`,
+      `You must wait ${formatTime(remaining)} before having another baby.`,
     );
   }
 
@@ -545,11 +545,11 @@ export default {
         .addSubcommand((subcommand) =>
           subcommand
             .setName('baby')
-            .setDescription('Have a fake baby with your partner')
+            .setDescription('Have a baby with your partner')
             .addStringOption((option) =>
               option
                 .setName('name')
-                .setDescription('The name of the fake baby')
+                .setDescription('The name of the (fake) baby')
                 .setRequired(true)
                 .setMinLength(2)
                 .setMaxLength(32),
