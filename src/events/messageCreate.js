@@ -1,3 +1,368 @@
+import { Events } from 'discord.js';
+import { processAutoModMessage } from '../services/automodService.js';
+import { logger } from '../utils/logger.js';
+import { getLevelingConfig, getUserLevelData } from '../services/leveling/leveling.js';
+import { addXp } from '../services/leveling/xpSystem.js';
+import { checkRateLimit } from '../utils/rateLimiter.js';
+import { parsePrefixCommand } from '../utils/prefixParser.js';
+import {
+  supportsPrefixExecution,
+  executePrefixCommand,
+  resolvePrefixAccessKey,
+} from '../utils/messageAdapter.js';
+import {
+  resolveCommandAlias,
+  resolveSubcommandAlias,
+} from '../config/commands/commandAliases.js';
+import { getPrefixRestriction } from '../config/commands/prefixRestrictions.js';
+import { getGuildConfig } from '../services/config/guildConfig.js';
+import {
+  getCommandPrefix,
+  getBotMessage,
+  isBotOwner,
+  isCommandCategoryEnabled,
+  isMaintenanceMode,
+} from '../config/bot.js';
+import {
+  enforceAbuseProtection,
+  formatCooldownDuration,
+} from '../utils/abuseProtection.js';
+import { createEmbed } from '../utils/embeds.js';
+import { isCommandEnabled } from '../services/commandAccessService.js';
+import {
+  getCountingGameConfig,
+  isValidCountingMessage,
+  recordCorrectCount,
+} from '../services/countingGameService.js';
+
+const MESSAGE_XP_RATE_LIMIT_ATTEMPTS = 12;
+const MESSAGE_XP_RATE_LIMIT_WINDOW_MS = 10_000;
+
+export default {
+  name: Events.MessageCreate,
+
+  async execute(message, client) {
+    try {
+      if (message.author.bot || !message.guild) return;
+
+      logger.debug(
+        `Message received from ${message.author.tag}: ${message.content}`,
+      );
+
+      const autoModResult = await processAutoModMessage(message, client);
+
+      // Stop verdere verwerking wanneer AutoMod dit bericht heeft afgehandeld.
+      if (autoModResult?.matched) {
+        return;
+      }
+
+      const countingProcessed = await handleCountingGame(message, client);
+
+      if (countingProcessed) {
+        return;
+      }
+
+      await handlePrefixCommand(message, client);
+      await handleLeveling(message, client);
+    } catch (error) {
+      logger.error('Error in messageCreate event:', error);
+    }
+  },
+};
+
+async function handlePrefixCommand(message, client) {
+  try {
+    const guildConfig = await getGuildConfig(client, message.guild.id);
+    const prefix = guildConfig?.prefix || getCommandPrefix();
+    const parsed = parsePrefixCommand(message.content, prefix);
+
+    if (!parsed) {
+      return;
+    }
+
+    let { commandName, args } = parsed;
+
+    const musicPrefixShortcut = commandName.toLowerCase();
+    const musicPrefixShortcuts = new Set([
+      'leave',
+      'pause',
+      'resume',
+      'skip',
+      'stop',
+      'volume',
+    ]);
+
+    if (musicPrefixShortcuts.has(musicPrefixShortcut)) {
+      commandName = 'music';
+      args = [musicPrefixShortcut, ...args];
+    }
+
+    logger.info(
+      `Prefix command detected: ${commandName}, args: ${args.join(', ')}`,
+    );
+
+    const resolvedCommandName = resolveCommandAlias(commandName);
+    const command = client.commands.get(resolvedCommandName);
+
+    if (!command) {
+      logger.warn(`Command not found: ${resolvedCommandName}`);
+      return;
+    }
+
+    if (isMaintenanceMode() && !isBotOwner(message.author.id)) {
+      await message.channel.send({
+        embeds: [
+          createEmbed({
+            title: 'Maintenance Mode',
+            description: getBotMessage('maintenanceMode'),
+            color: 'warning',
+          }),
+        ],
+      }).catch(() => {});
+
+      return;
+    }
+
+    if (!isCommandCategoryEnabled(command.category)) {
+      await message.channel.send({
+        embeds: [
+          createEmbed({
+            title: 'Feature Disabled',
+            description: getBotMessage('commandDisabled'),
+            color: 'error',
+          }),
+        ],
+      }).catch(() => {});
+
+      return;
+    }
+
+    const restriction = getPrefixRestriction(
+      command,
+      args,
+      resolveSubcommandAlias,
+    );
+
+    if (!supportsPrefixExecution(command) || restriction.blocked) {
+      if (restriction.blocked && restriction.reason) {
+        await message.channel.send({
+          embeds: [
+            createEmbed({
+              title: 'Slash Command Only',
+              description: `${restriction.reason}\nUse \`/${resolvedCommandName}\` instead.`,
+              color: 'info',
+            }),
+          ],
+        }).catch(() => {});
+      }
+
+      return;
+    }
+
+    const accessKey = resolvePrefixAccessKey(command.data, args);
+
+    const commandEnabled = await isCommandEnabled(
+      client,
+      message.guild.id,
+      accessKey,
+      command.category,
+    );
+
+    if (!commandEnabled) {
+      await message.channel.send({
+        embeds: [
+          createEmbed({
+            title: 'Command Disabled',
+            description: 'This command has been disabled for this server.',
+            color: 'error',
+          }),
+        ],
+      }).catch(() => {});
+
+      return;
+    }
+
+    const mockInteractionForProtection = {
+      guildId: message.guild.id,
+      user: message.author,
+    };
+
+    const abuseProtection = await enforceAbuseProtection(
+      mockInteractionForProtection,
+      command,
+      resolvedCommandName,
+    );
+
+    if (!abuseProtection.allowed) {
+      const formattedCooldown = formatCooldownDuration(
+        abuseProtection.remainingMs,
+      );
+
+      await message.channel.send({
+        embeds: [
+          createEmbed({
+            title: 'Command Cooldown',
+            description: `This command is on cooldown. Please wait ${formattedCooldown} before trying again.`,
+            color: 'error',
+          }),
+        ],
+      }).catch(() => {});
+
+      return;
+    }
+
+    logger.info(
+      `Executing prefix command: ${prefix}${commandName} (resolved to ${resolvedCommandName}) by ${message.author.tag}`,
+    );
+
+    await executePrefixCommand(
+      command,
+      message,
+      args,
+      client,
+      prefix,
+      guildConfig,
+    );
+  } catch (error) {
+    logger.error('Error handling prefix command:', error);
+  }
+}
+
+async function handleCountingGame(message, client) {
+  try {
+    const config = await getCountingGameConfig(client, message.guild.id);
+
+    if (!config?.enabled || !config.channelId || message.channel.id !== config.channelId) {
+      return false;
+    }
+
+    const content = message.content.trim();
+    const validCount = isValidCountingMessage(content, config);
+
+    // Een speler mag niet twee correcte nummers na elkaar plaatsen.
+    const invalidAttempt =
+      !validCount || message.author.id === config.lastUserId;
+
+    if (invalidAttempt) {
+      await message.delete().catch(() => {});
+      return true;
+    }
+
+    await recordCorrectCount(client, message.guild.id, message.author.id);
+
+    // Toon een vinkje bij een correct nummer.
+    await message.react('✅').catch(() => {});
+
+    return true;
+  } catch (error) {
+    logger.error('Error handling counting game:', error);
+    return false;
+  }
+}
+
+async function handleLeveling(message, client) {
+  try {
+    const rateLimitKey = `xp-event:${message.guild.id}:${message.author.id}`;
+
+    const canProcess = await checkRateLimit(
+      rateLimitKey,
+      MESSAGE_XP_RATE_LIMIT_ATTEMPTS,
+      MESSAGE_XP_RATE_LIMIT_WINDOW_MS,
+    );
+
+    if (!canProcess) {
+      return;
+    }
+
+    const levelingConfig = await getLevelingConfig(
+      client,
+      message.guild.id,
+    );
+
+    if (!levelingConfig?.enabled) {
+      return;
+    }
+
+    if (levelingConfig.ignoredChannels?.includes(message.channel.id)) {
+      return;
+    }
+
+    if (levelingConfig.ignoredRoles?.length > 0) {
+      const member = await message.guild.members
+        .fetch(message.author.id)
+        .catch(() => null);
+
+      if (
+        member &&
+        member.roles.cache.some((role) =>
+          levelingConfig.ignoredRoles.includes(role.id),
+        )
+      ) {
+        return;
+      }
+    }
+
+    if (levelingConfig.blacklistedUsers?.includes(message.author.id)) {
+      return;
+    }
+
+    if (!message.content?.trim()) {
+      return;
+    }
+
+    const userData = await getUserLevelData(
+      client,
+      message.guild.id,
+      message.author.id,
+    );
+
+    const cooldownTime = levelingConfig.xpCooldown || 60;
+    const timeSinceLastMessage = Date.now() - (userData.lastMessage || 0);
+
+    if (timeSinceLastMessage < cooldownTime * 1000) {
+      return;
+    }
+
+    const minXP =
+      levelingConfig.xpRange?.min ||
+      levelingConfig.xpPerMessage?.min ||
+      15;
+
+    const maxXP =
+      levelingConfig.xpRange?.max ||
+      levelingConfig.xpPerMessage?.max ||
+      25;
+
+    const safeMinXP = Math.max(1, minXP);
+    const safeMaxXP = Math.max(safeMinXP, maxXP);
+
+    const xpToGive =
+      Math.floor(Math.random() * (safeMaxXP - safeMinXP + 1)) +
+      safeMinXP;
+
+    let finalXP = xpToGive;
+
+    if (levelingConfig.xpMultiplier > 1) {
+      finalXP = Math.floor(finalXP * levelingConfig.xpMultiplier);
+    }
+
+    const result = await addXp(
+      client,
+      message.guild,
+      message.member,
+      finalXP,
+    );
+
+    if (result?.leveledUp) {
+      logger.info(
+        `${message.author.tag} leveled up to level ${result.level} in ${message.guild.name}`,
+      );
+    }
+  } catch (error) {
+    logger.error('Error handling leveling for message:', error);
+  }
+}
+/*
 import { processAutoModMessage } from '../services/automodService.js';
 import { Events } from 'discord.js';
 import { logger } from '../utils/logger.js';
@@ -274,7 +639,7 @@ async function handleLeveling(message, client) {
     logger.error('Error handling leveling for message:', error);
   }
 }
-
+*/
 
 /*import { Events } from 'discord.js';
 import { logger } from '../utils/logger.js';
