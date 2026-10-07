@@ -1,3 +1,4 @@
+import { processAutoModMessage } from '../services/automodService.js';
 import { Events } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { getLevelingConfig, getUserLevelData } from '../services/leveling/leveling.js';
@@ -26,10 +27,30 @@ export default {
   async execute(message, client) {
     try {
       if (message.author.bot || !message.guild) return;
+async execute(message, client) {
+  try {
+    if (message.author.bot || !message.guild) return;
 
-      logger.debug(`Message received from ${message.author.tag}: ${message.content}`);
+    logger.debug(`Message received from ${message.author.tag}: ${message.content}`);
 
-      const countingProcessed = await handleCountingGame(message, client);
+    const autoModResult = await processAutoModMessage(message, client);
+
+    if (autoModResult.matched) {
+      return;
+    }
+
+    const countingProcessed = await handleCountingGame(message, client);
+
+    if (countingProcessed) {
+      return;
+    }
+
+    await handlePrefixCommand(message, client);
+    await handleLeveling(message, client);
+  } catch (error) {
+    logger.error('Error in messageCreate event:', error);
+  }
+}
       if (countingProcessed) {
         return;
       }
@@ -43,7 +64,7 @@ export default {
   }
 };
 
-async function handlePrefixCommand(message, client) {
+async function handlePrefixCommand(message, ) {
   try {
     const guildConfig = await getGuildConfig(client, message.guild.id);
     const prefix = guildConfig?.prefix || getCommandPrefix();
