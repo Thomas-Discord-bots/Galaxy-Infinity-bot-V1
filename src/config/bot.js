@@ -59,7 +59,7 @@ export const botConfig = {
   // ADMIN / BOT OWNER
   // =========================
   // A single admin user ID used for special display/bypass logic (infinite money, etc.).
-  adminUserId: process.env.ADMIN_USER_ID || '1472237148324233361',
+  adminUserId: process.env.ADMIN_USER_ID || '1540969774824292414',
 
   // =========================
   // APPLICATIONS SYSTEM
