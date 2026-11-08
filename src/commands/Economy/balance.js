@@ -6,7 +6,7 @@ import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 
 // Admin user ID for display purposes
-const ADMIN_USER_ID = '1472237148324233361';
+const ADMIN_USER_ID = '1540969774824292414';
 
 export default {
     data: new SlashCommandBuilder()
