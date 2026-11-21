@@ -8,7 +8,6 @@ import {
   ModalBuilder,
   TextInputBuilder,
   TextInputStyle,
-  ComponentType,
   MessageFlags,
 } from 'discord.js';
 import { createEmbed } from '../../utils/embeds.js';
@@ -65,8 +64,8 @@ function formatWords(words) {
 function buildDashboardEmbed(config, selectedLevel = null) {
   const punishmentLines = config.punishments
     .map((punishment, index) => {
-      const active = selectedLevel === index + 1 ? 'Current selection: ' : '';
-      return `Level ${index + 1}: ${active}${displayPunishment(punishment)}`;
+      const prefix = selectedLevel === index + 1 ? 'Current: ' : '';
+      return `Level ${index + 1}: ${prefix}${displayPunishment(punishment)}`;
     })
     .join('\n');
 
@@ -86,7 +85,7 @@ function buildDashboardEmbed(config, selectedLevel = null) {
       punishmentLines,
       '',
       'Messages matching a blacklisted word are always deleted first.',
-      'From violation 6 onward, AutoMod keeps using level 5.',
+      'From violation 6 onward, AutoMod uses level 5.',
     ].join('\n'),
     color: config.enabled ? 'primary' : 'warning',
   });
@@ -147,12 +146,14 @@ function punishmentComponents(config, selectedLevel) {
         .setPlaceholder('Choose an offence level')
         .addOptions(levelOptions),
     ),
+
     new ActionRowBuilder().addComponents(
       new StringSelectMenuBuilder()
         .setCustomId('automod_select_punishment')
         .setPlaceholder('Choose the punishment')
         .addOptions(punishmentOptions),
     ),
+
     new ActionRowBuilder().addComponents(
       new ButtonBuilder()
         .setCustomId('automod_back')
@@ -216,12 +217,11 @@ function createTextModal({
 
 async function openTextModal({
   componentInteraction,
-  dashboardMessage,
-  render,
   modal,
   inputId,
   save,
   successMessage,
+  render,
 }) {
   await componentInteraction.showModal(modal);
 
@@ -229,7 +229,7 @@ async function openTextModal({
     time: 5 * 60 * 1000,
     filter: (modalInteraction) =>
       modalInteraction.user.id === componentInteraction.user.id &&
-      modalInteraction.customId === modal.data.custom_id,
+      modalInteraction.customId === modal.toJSON().custom_id,
   }).catch(() => null);
 
   if (!submission) return;
@@ -240,12 +240,17 @@ async function openTextModal({
 
   try {
     const value = submission.fields.getTextInputValue(inputId);
+
     await save(value);
     await render();
+
     await submission.editReply(successMessage);
   } catch (error) {
-    logger.error('AutoMod dashboard modal error:', error);
-    await submission.editReply('AutoMod could not save that setting.');
+    logger.error('AutoMod modal save error:', error);
+
+    await submission.editReply(
+      'AutoMod could not save that setting. Check the bot logs for the exact error.',
+    );
   }
 }
 
@@ -279,7 +284,7 @@ export default {
     let view = 'main';
     let selectedLevel = 1;
 
-    const renderPayload = async () => {
+    const buildPayload = async () => {
       const config = await getAutoModConfig(interaction.guildId);
 
       if (view === 'punishments') {
@@ -302,222 +307,245 @@ export default {
       };
     };
 
-    const initialPayload = await renderPayload();
-    const dashboardMessage = await interaction.editReply(initialPayload);
-
     const render = async () => {
-      const payload = await renderPayload();
-      await dashboardMessage.edit(payload);
+      const payload = await buildPayload();
+
+      // Gebruik de originele interaction in plaats van dashboardMessage.edit().
+      // Dit werkt betrouwbaar voor ephemeral dashboards.
+      await interaction.editReply(payload);
     };
+
+    await render();
+
+    // fetchReply geeft een echt Message-object waarmee de collector werkt.
+    const dashboardMessage = await interaction.fetchReply();
 
     const collector = dashboardMessage.createMessageComponentCollector({
       time: 15 * 60 * 1000,
     });
 
-    collector.on('collect', async (componentInteraction) => {
+    const handleComponent = async (componentInteraction) => {
       if (componentInteraction.user.id !== interaction.user.id) {
-        return componentInteraction.reply({
+        await componentInteraction.reply({
           content: 'Run `/automod dashboard` to open your own dashboard.',
           flags: MessageFlags.Ephemeral,
         });
+
+        return;
       }
 
-      try {
-        const config = await getAutoModConfig(interaction.guildId);
+      const config = await getAutoModConfig(interaction.guildId);
 
-        if (componentInteraction.customId === 'automod_toggle') {
-          await componentInteraction.deferUpdate();
-          await setAutoModEnabled(interaction.guildId, !config.enabled);
-          return render();
+      if (componentInteraction.customId === 'automod_toggle') {
+        await componentInteraction.deferUpdate();
+        await setAutoModEnabled(interaction.guildId, !config.enabled);
+        await render();
+        return;
+      }
+
+      if (componentInteraction.customId === 'automod_words') {
+        const modal = createTextModal({
+          customId: `automod_words_${interaction.id}`,
+          title: 'Blacklist words',
+          inputId: 'words',
+          label: 'Words or phrases, one per line',
+          value: config.words.join('\n'),
+          placeholder: 'spamword\nanother phrase\nthird word',
+        });
+
+        await openTextModal({
+          componentInteraction,
+          modal,
+          inputId: 'words',
+          render,
+          save: async (value) => {
+            await setAutoModWords(interaction.guildId, parseLines(value));
+          },
+          successMessage: 'The blacklist was updated.',
+        });
+
+        return;
+      }
+
+      if (componentInteraction.customId === 'automod_punishments') {
+        await componentInteraction.deferUpdate();
+        view = 'punishments';
+        await render();
+        return;
+      }
+
+      if (componentInteraction.customId === 'automod_exceptions') {
+        await componentInteraction.deferUpdate();
+        view = 'exceptions';
+        await render();
+        return;
+      }
+
+      if (componentInteraction.customId === 'automod_back') {
+        await componentInteraction.deferUpdate();
+        view = 'main';
+        await render();
+        return;
+      }
+
+      if (componentInteraction.customId === 'automod_select_level') {
+        await componentInteraction.deferUpdate();
+        selectedLevel = Number(componentInteraction.values[0]) || 1;
+        await render();
+        return;
+      }
+
+      if (componentInteraction.customId === 'automod_select_punishment') {
+        const punishment = componentInteraction.values[0];
+
+        await componentInteraction.deferUpdate();
+
+        if (!VALID_PUNISHMENTS.has(punishment)) {
+          return;
         }
 
-        if (componentInteraction.customId === 'automod_words') {
-          const modal = createTextModal({
-            customId: 'automod_words_modal',
-            title: 'Blacklist words',
-            inputId: 'words',
-            label: 'Words or phrases, one per line',
-            value: config.words.join('\n'),
-            placeholder: 'spamword\nanother phrase\nthird word',
-          });
+        await setAutoModPunishment(
+          interaction.guildId,
+          selectedLevel,
+          punishment,
+        );
 
-          return openTextModal({
-            componentInteraction,
-            dashboardMessage,
-            render,
-            modal,
-            inputId: 'words',
-            save: async (value) => {
-              await setAutoModWords(interaction.guildId, parseLines(value));
-            },
-            successMessage: 'The blacklist was updated.',
-          });
-        }
+        await render();
+        return;
+      }
 
-        if (componentInteraction.customId === 'automod_punishments') {
-          await componentInteraction.deferUpdate();
-          view = 'punishments';
-          return render();
-        }
+      if (componentInteraction.customId === 'automod_channels') {
+        const modal = createTextModal({
+          customId: `automod_channels_${interaction.id}`,
+          title: 'Ignored channels',
+          inputId: 'channels',
+          label: 'Channel IDs, one per line',
+          value: config.ignoredChannelIds.join('\n'),
+          placeholder: '123456789012345678',
+        });
 
-        if (componentInteraction.customId === 'automod_exceptions') {
-          await componentInteraction.deferUpdate();
-          view = 'exceptions';
-          return render();
-        }
+        await openTextModal({
+          componentInteraction,
+          modal,
+          inputId: 'channels',
+          render,
+          save: async (value) => {
+            await updateAutoModConfig(interaction.guildId, {
+              ignoredChannelIds: parseIds(value),
+            });
+          },
+          successMessage: 'Ignored channels were updated.',
+        });
 
-        if (componentInteraction.customId === 'automod_back') {
-          await componentInteraction.deferUpdate();
-          view = 'main';
-          return render();
-        }
+        return;
+      }
 
-        if (componentInteraction.customId === 'automod_select_level') {
-          await componentInteraction.deferUpdate();
-          selectedLevel = Number(componentInteraction.values[0]) || 1;
-          return render();
-        }
+      if (componentInteraction.customId === 'automod_roles') {
+        const modal = createTextModal({
+          customId: `automod_roles_${interaction.id}`,
+          title: 'Ignored roles',
+          inputId: 'roles',
+          label: 'Role IDs, one per line',
+          value: config.ignoredRoleIds.join('\n'),
+          placeholder: '123456789012345678',
+        });
 
-        if (componentInteraction.customId === 'automod_select_punishment') {
-          await componentInteraction.deferUpdate();
+        await openTextModal({
+          componentInteraction,
+          modal,
+          inputId: 'roles',
+          render,
+          save: async (value) => {
+            await updateAutoModConfig(interaction.guildId, {
+              ignoredRoleIds: parseIds(value),
+            });
+          },
+          successMessage: 'Ignored roles were updated.',
+        });
 
-          const punishment = componentInteraction.values[0];
+        return;
+      }
 
-          if (!VALID_PUNISHMENTS.has(punishment)) {
-            return;
-          }
+      if (componentInteraction.customId === 'automod_users') {
+        const modal = createTextModal({
+          customId: `automod_users_${interaction.id}`,
+          title: 'Ignored users',
+          inputId: 'users',
+          label: 'User IDs, one per line',
+          value: config.ignoredUserIds.join('\n'),
+          placeholder: '123456789012345678',
+        });
 
-          await setAutoModPunishment(
-            interaction.guildId,
-            selectedLevel,
-            punishment,
-          );
+        await openTextModal({
+          componentInteraction,
+          modal,
+          inputId: 'users',
+          render,
+          save: async (value) => {
+            await updateAutoModConfig(interaction.guildId, {
+              ignoredUserIds: parseIds(value),
+            });
+          },
+          successMessage: 'Ignored users were updated.',
+        });
 
-          return render();
-        }
+        return;
+      }
 
-        if (componentInteraction.customId === 'automod_channels') {
-          const modal = createTextModal({
-            customId: 'automod_channels_modal',
-            title: 'Ignored channels',
-            inputId: 'channels',
-            label: 'Channel IDs, one per line',
-            value: config.ignoredChannelIds.join('\n'),
-            placeholder: '123456789012345678',
-          });
+      if (componentInteraction.customId === 'automod_reset') {
+        const modal = createTextModal({
+          customId: `automod_reset_${interaction.id}`,
+          title: 'Reset AutoMod violations',
+          inputId: 'user_id',
+          label: 'Discord user ID',
+          placeholder: '123456789012345678',
+        });
 
-          return openTextModal({
-            componentInteraction,
-            dashboardMessage,
-            render,
-            modal,
-            inputId: 'channels',
-            save: async (value) => {
-              await updateAutoModConfig(interaction.guildId, {
-                ignoredChannelIds: parseIds(value),
-              });
-            },
-            successMessage: 'Ignored channels were updated.',
-          });
-        }
+        await openTextModal({
+          componentInteraction,
+          modal,
+          inputId: 'user_id',
+          render,
+          save: async (value) => {
+            const userId = value.trim();
 
-        if (componentInteraction.customId === 'automod_roles') {
-          const modal = createTextModal({
-            customId: 'automod_roles_modal',
-            title: 'Ignored roles',
-            inputId: 'roles',
-            label: 'Role IDs, one per line',
-            value: config.ignoredRoleIds.join('\n'),
-            placeholder: '123456789012345678',
-          });
+            if (!/^\d{15,25}$/.test(userId)) {
+              throw new Error('Invalid Discord user ID');
+            }
 
-          return openTextModal({
-            componentInteraction,
-            dashboardMessage,
-            render,
-            modal,
-            inputId: 'roles',
-            save: async (value) => {
-              await updateAutoModConfig(interaction.guildId, {
-                ignoredRoleIds: parseIds(value),
-              });
-            },
-            successMessage: 'Ignored roles were updated.',
-          });
-        }
+            await resetAutoModViolations(interaction.guildId, userId);
+          },
+          successMessage: 'That user’s AutoMod violation count was reset.',
+        });
+      }
+    };
 
-        if (componentInteraction.customId === 'automod_users') {
-          const modal = createTextModal({
-            customId: 'automod_users_modal',
-            title: 'Ignored users',
-            inputId: 'users',
-            label: 'User IDs, one per line',
-            value: config.ignoredUserIds.join('\n'),
-            placeholder: '123456789012345678',
-          });
-
-          return openTextModal({
-            componentInteraction,
-            dashboardMessage,
-            render,
-            modal,
-            inputId: 'users',
-            save: async (value) => {
-              await updateAutoModConfig(interaction.guildId, {
-                ignoredUserIds: parseIds(value),
-              });
-            },
-            successMessage: 'Ignored users were updated.',
-          });
-        }
-
-        if (componentInteraction.customId === 'automod_reset') {
-          const modal = createTextModal({
-            customId: 'automod_reset_modal',
-            title: 'Reset AutoMod violations',
-            inputId: 'user_id',
-            label: 'Discord user ID',
-            placeholder: '123456789012345678',
-          });
-
-          return openTextModal({
-            componentInteraction,
-            dashboardMessage,
-            render,
-            modal,
-            inputId: 'user_id',
-            save: async (value) => {
-              const userId = value.trim();
-
-              if (!/^\d{15,25}$/.test(userId)) {
-                throw new Error('Invalid user ID');
-              }
-
-              await resetAutoModViolations(interaction.guildId, userId);
-            },
-            successMessage: 'That user’s AutoMod violation count was reset.',
-          });
-        }
-      } catch (error) {
+    collector.on('collect', (componentInteraction) => {
+      void handleComponent(componentInteraction).catch(async (error) => {
         logger.error('AutoMod dashboard interaction error:', error);
 
-        if (!componentInteraction.replied && !componentInteraction.deferred) {
-          await componentInteraction.reply({
-            content: 'Something went wrong while updating AutoMod.',
-            flags: MessageFlags.Ephemeral,
-          });
+        try {
+          if (!componentInteraction.replied && !componentInteraction.deferred) {
+            await componentInteraction.reply({
+              content: 'Something went wrong while updating AutoMod.',
+              flags: MessageFlags.Ephemeral,
+            });
+          } else {
+            await componentInteraction.followUp({
+              content: 'Something went wrong while updating AutoMod.',
+              flags: MessageFlags.Ephemeral,
+            });
+          }
+        } catch {
+          // De fout is al naar de serverlog geschreven.
         }
-      }
+      });
     });
 
-    collector.on('end', async () => {
-      try {
-        await dashboardMessage.edit({
-          components: [],
-        });
-      } catch {
-        // The temporary dashboard message may already be gone.
-      }
+    collector.on('end', () => {
+      void interaction.editReply({
+        components: [],
+      }).catch(() => {});
     });
   },
 };
